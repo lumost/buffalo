@@ -1,11 +1,11 @@
 package middleware
 
 import (
-	"errors"
 	"fmt"
 
 	. "github.com/getsentry/raven-go"
 	"github.com/gobuffalo/buffalo"
+	"github.com/pkg/errors"
 )
 
 // Sentry returns a piece of buffalo.Middleware that can
@@ -25,7 +25,7 @@ func Sentry(prefixes []string, panicsOnly bool) buffalo.MiddlewareFunc {
 			}()
 			err := next(c)
 			if !panicsOnly && err != nil {
-				packet := NewPacket(err.Error(), NewException(err, NewStacktrace(2, 3, prefixes)), NewHttp(c.Request()))
+				packet := NewPacket(err.Error(), &Message{Message: err.Error()}, NewHttp(c.Request()))
 				Capture(packet, nil)
 			}
 			return err
