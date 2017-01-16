@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"reflect"
 	"runtime"
 
 	. "github.com/getsentry/raven-go"
@@ -11,7 +12,7 @@ import (
 
 // stackTracer exposes the StackTrace method in the errors pkg
 type stackTracer interface {
-	StackTrace() []errors.StackTrace
+	StackTrace() errors.StackTrace
 }
 
 // Sentry returns a piece of buffalo.Middleware that can
@@ -31,14 +32,20 @@ func Sentry(prefixes []string, panicsOnly bool) buffalo.MiddlewareFunc {
 			}()
 			err := next(c)
 			if !panicsOnly && err != nil {
+				httpErr, ok := err.(buffalo.HTTPError)
+				if ok {
+					err = httpErr.Cause
+				}
 				tracer, ok := err.(stackTracer)
 				if ok {
-					NewPacket(err.Error(), NewException(err, buildSentryStackTrace(trace)), NewHttp(c.Request()))
+					packet := NewPacket(err.Error(), NewException(httpErr, buildSentryStackTrace(tracer, prefixes)), NewHttp(c.Request()))
+					Capture(packet, nil)
+				} else {
+					// if the error doesn't conform to the stackTracer interface then just send it along without a stack trace
+					fmt.Println(reflect.TypeOf(err))
+					packet := NewPacket(err.Error(), &Message{Message: err.Error()}, NewHttp(c.Request()))
 					Capture(packet, nil)
 				}
-				// if the error doesn't conform to the stackTracer interface then just send it along without a stack trace
-				packet := NewPacket(err.Error(), &Message{Message: err.Error()}, NewHttp(c.Request()))
-				Capture(packet, nil)
 			}
 
 			return err
@@ -47,28 +54,28 @@ func Sentry(prefixes []string, panicsOnly bool) buffalo.MiddlewareFunc {
 
 }
 
-func buildSentryStackTrace(trace stackTracer) *StackTrace {
-	trace := tracer.StackTrace()
+func buildSentryStackTrace(tracer stackTracer, appPackagePrefixes []string) *Stacktrace {
+	trace := []errors.Frame(tracer.StackTrace())
 	// We aren't sure how much of our stack trace is going to pass the appPackagePrefix test
-	var SentryFrames []*StacktraceFrame
+	var sentryFrames []*StacktraceFrame
 	// Iterate through each stack frame and get the function
 	// if we find a function get its file and line number
-	// then call NewStackTraceFrame from Sentry to build a sentry frame
+	// then call NewStackTraceFrames from Sentry to build a sentry frame
 	for i := len(trace) - 1; i >= 0; i-- {
-		fn := runtime.FuncForPc(pc(trace[i]))
+		fn := runtime.FuncForPC(pc(trace[i]))
 		if fn == nil {
 			continue
 		}
 		file, line := fn.FileLine(pc(trace[i]))
 		frame := NewStacktraceFrame(pc(trace[i]), file, line, 3, appPackagePrefixes)
 		if frame != nil {
-			frames = append(frames, frame)
+			sentryFrames = append(sentryFrames, frame)
 		}
 	}
-	return &Stacktrace{frames}
+	return &Stacktrace{sentryFrames}
 }
 
 // pc recovers uintptrs from errors.Frames
-func pc(frame errors.Frame) {
-	return (uintptr(f) - 1)
+func pc(frame errors.Frame) uintptr {
+	return (uintptr(frame) - 1)
 }
