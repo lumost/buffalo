@@ -76,6 +76,13 @@ func (e ErrorHandlers) Get(status int) ErrorHandler {
 	return defaultErrorHandler
 }
 
+// unexported type used to handle errors with stack traces
+type ErrorStack struct {
+	Msg      string
+	Stack    string
+	HasStack bool
+}
+
 func defaultErrorHandler(status int, err error, c Context) error {
 	env := c.Get("env")
 	if env != nil && env.(string) == "production" {
@@ -86,19 +93,46 @@ func defaultErrorHandler(status int, err error, c Context) error {
 	c.Logger().Error(err)
 	c.Response().WriteHeader(status)
 
-	msg := fmt.Sprintf("%+v", err)
+	// get the full error causal chain
+	errorSlice := ErrorChain(err)
+	var eStacks []ErrorStack
+	for _, item := range errorSlice {
+		tracer, ok := item.(StackTracer)
+		var eStack ErrorStack
+		if ok {
+			stack := fmt.Sprintf("%+v", tracer.StackTrace())
+			eStack = ErrorStack{
+				Msg:      item.Error(),
+				Stack:    stack,
+				HasStack: true,
+			}
+		} else {
+			eStack = ErrorStack{
+				Msg:      item.Error(),
+				HasStack: false,
+			}
+		}
+
+		eStacks = append(eStacks, eStack)
+	}
+	// reverse the error slice to be oldest first
+	for i := len(eStacks)/2 - 1; i >= 0; i-- {
+		opp := len(eStacks) - 1 - i
+		eStacks[i], eStacks[opp] = eStacks[opp], eStacks[i]
+	}
+
 	ct := c.Request().Header.Get("Content-Type")
 	switch strings.ToLower(ct) {
 	case "application/json", "text/json", "json":
 		err = json.NewEncoder(c.Response()).Encode(map[string]interface{}{
-			"error": msg,
-			"code":  status,
+			"errors": eStacks,
+			"code":   status,
 		})
 	case "application/xml", "text/xml", "xml":
 	default:
 		data := map[string]interface{}{
 			"routes": c.Get("routes"),
-			"error":  msg,
+			"errors": eStacks,
 			"status": status,
 			"data":   c.Data(),
 		}
@@ -153,7 +187,12 @@ var devErrorTmpl = `
 </head>
 <body>
 <h1>{{status}} - ERROR!</h1>
-<pre>{{error}}</pre>
+{{#each errors as |error|}}
+<pre>{{ error.Msg }}</pre>
+{{#if error.HasStack }}
+<pre>{{ error.Stack }}</pre>
+{{/if}}
+{{/each}}
 <hr>
 <h3>Context</h3>
 <pre>{{#each data as |k v|}}

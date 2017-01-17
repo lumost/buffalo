@@ -63,7 +63,6 @@ func (a *App) handlerToHandler(info RouteInfo, h Handler) http.Handler {
 				httpErr, isHTTP := cause.(HTTPError)
 				if isHTTP {
 					status = httpErr.Status
-					err = httpErr
 					break
 				}
 				cause, isCauser = cause.Cause().(Causer)
