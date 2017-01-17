@@ -9,14 +9,45 @@ import (
 	"github.com/pkg/errors"
 )
 
+// StackTracer exposes the StackTrace() method in the errors pkg
+type StackTracer interface {
+	StackTrace() errors.StackTrace
+}
+
+// Causer exposes the Cause() method of the errors package
+type Causer interface {
+	Cause() error
+}
+
 // HTTPError a typed error returned by http Handlers and used for choosing error handlers
 type HTTPError struct {
-	Status int   `json:"status"`
-	Cause  error `json:"error"`
+	Status   int   `json:"status"`
+	CausedBy error `json:"error"`
 }
 
 func (h HTTPError) Error() string {
-	return h.Cause.Error()
+	return h.CausedBy.Error()
+}
+
+func (h HTTPError) Cause() error {
+	return h.CausedBy
+}
+
+// ErrorChain converts nested errors into a slice of errors
+// the slice is returned with the oldest error last.
+func ErrorChain(e error) []error {
+	var causeChain []error
+	cause, ok := e.(Causer)
+	for ok {
+		causeChain = append(causeChain, cause.(error))
+		cause, ok = cause.Cause().(Causer)
+	}
+	// check if the last error in the cause chain is not nil and append as we are not
+	// guaranteed that the final error will implement Causer
+	if cause != nil {
+		causeChain = append(causeChain, cause.(error))
+	}
+	return causeChain
 }
 
 // ErrorHandler interface for handling an error for a
